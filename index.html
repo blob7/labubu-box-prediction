@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Box Item Probability Tool</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <h1>Box ↔ Item Probability Explorer</h1>
+
+    <section class="config">
+      <div id="itemsListContainer">
+        <h3>Items (one per box)</h3>
+        <ul id="itemsList"></ul>
+        <button id="addItemBtn">+ Add item</button>
+      </div>
+      <div class="actions">
+        <button id="generateBtn">Generate Boxes / Reset Hints</button>
+        <button id="randomAssignBtn">Random assignment (simulation)</button>
+        <button id="clearSimBtn">Clear simulation</button>
+        <div id="status" class="small" aria-live="polite" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+    <section id="boxesSection">
+      <h2>Boxes</h2>
+      <div id="boxesGrid" class="grid"></div>
+    </section>
+
+    <section id="breakdown">
+      <h2>Breakdown</h2>
+      <div id="bestForItem"></div>
+      <div id="avoidForItem"></div>
+    </section>
+
+    <section id="notes">
+      <h3>Notes</h3>
+      <p>This enumerates all permutations consistent with the hints and shows exact probabilities. For large numbers of items (n &gt; 9) this will be slow or memory heavy; in that case the app uses sampling (approximate) and shows progress in the status area.</p>
+
+      <h4>What is a permutation?</h4>
+      <p>In this app a permutation is one possible way to place the set of items into the boxes so that each box has exactly one item and every item appears once. For example, if you have three items A, B and C and three boxes, one permutation is:</p>
+      <ul>
+        <li>Box 1 → A, Box 2 → B, Box 3 → C</li>
+      </ul>
+      <p>Another permutation is Box 1 → B, Box 2 → C, Box 3 → A. The app checks every permutation that doesn't contradict your hints and counts how many times each item appears in each box across all valid permutations. Those counts are converted to probabilities.</p>
+
+      <h4>Why permutations get expensive</h4>
+      <p>The number of permutations grows very fast: for n items there are n! (n factorial) permutations. Example sizes:</p>
+      <ul>
+        <li>3 items → 6 permutations (3! = 6)</li>
+        <li>6 items → 720 permutations (6! = 720)</li>
+        <li>10 items → 3,628,800 permutations (10! = 3,628,800)</li>
+      </ul>
+      <p>Because of that exponential growth, the page uses exact enumeration for small n and switches to sampling for larger n to keep the UI responsive. The status line will show progress while sampling.</p>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
