@@ -20,8 +20,23 @@
         <button id="generateBtn">Generate Boxes / Reset Hints</button>
         <button id="randomAssignBtn">Random assignment (simulation)</button>
         <button id="clearSimBtn">Clear simulation</button>
-        <div id="status" class="small" aria-live="polite" style="margin-top:8px"></div>
       </div>
+        <div class="computeControls" style="margin-top:10px; display:flex;flex-direction:column;gap:6px;">
+          <div id="status" class="small" aria-live="polite" style="margin-top:0"></div>
+          <div id="progressWrap" style="margin-top:6px; display:none">
+            <div id="progressBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+          </div>
+          <label id="computeModeLabel" class="small">Computation mode:
+            <select id="computeMode">
+              <option value="auto">Auto (exact for small n, sampling for large n)</option>
+              <option value="sample">Sampling (approx)</option>
+              <option value="exact">Exact (may be slow)</option>
+            </select>
+          </label>
+          <label id="sampleSizeLabel" class="small">Sample size:
+            <input id="sampleSizeInput" type="number" min="100" max="1000000" step="100" value="20000" style="width:110px" />
+          </label>
+        </div>
     </section>
 
     <section id="boxesSection">
@@ -37,7 +52,7 @@
 
     <section id="notes">
       <h3>Notes</h3>
-      <p>This enumerates all permutations consistent with the hints and shows exact probabilities. For large numbers of items (n &gt; 9) this will be slow or memory heavy; in that case the app uses sampling (approximate) and shows progress in the status area.</p>
+      <p>Exact odds are calculated from all valid combinations. With more than 9 items, it uses a quicker estimate instead and shows progress as it works.</p>
 
       <h4>What is a permutation?</h4>
       <p>In this app a permutation is one possible way to place the set of items into the boxes so that each box has exactly one item and every item appears once. For example, if you have three items A, B and C and three boxes, one permutation is:</p>
@@ -54,6 +69,7 @@
         <li>10 items → 3,628,800 permutations (10! = 3,628,800)</li>
       </ul>
       <p>Because of that exponential growth, the page uses exact enumeration for small n and switches to sampling for larger n to keep the UI responsive. The status line will show progress while sampling.</p>
+    <i>If you found this helpful consider giving me a ⭐ on <a href="https://github.com/your-repo">GitHub</a>!</i>
     </section>
   </main>
 

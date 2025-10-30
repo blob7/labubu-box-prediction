@@ -9,6 +9,12 @@
   const randomAssignBtn = document.getElementById('randomAssignBtn');
   const clearSimBtn = document.getElementById('clearSimBtn');
   const statusEl = document.getElementById('status');
+  const computeModeEl = document.getElementById('computeMode');
+  const sampleSizeInput = document.getElementById('sampleSizeInput');
+  const progressBar = document.getElementById('progressBar');
+  const progressWrap = document.getElementById('progressWrap');
+
+  let currentRunId = 0; // used to cancel outdated computations
 
   let items = [];
   let hints = []; // hints per box: {is: index|null, not:Set}
@@ -43,6 +49,29 @@
   }
 
   addItemBtn.addEventListener('click', ()=>{ items.push('Item '+(items.length+1)); renderItemsList(); });
+
+  // toggle sample size control visibility depending on compute mode
+  function updateComputeControlsVisibility(){
+    if(!computeModeEl) return;
+    const mode = computeModeEl.value;
+    const sampleLabel = document.getElementById('sampleSizeLabel');
+    if(sampleLabel) sampleLabel.style.display = (mode === 'sample') ? '' : 'none';
+  }
+  if(computeModeEl){
+    computeModeEl.addEventListener('change', ()=>{ updateComputeControlsVisibility(); updateAll(); });
+  }
+  if(sampleSizeInput){ sampleSizeInput.addEventListener('change', ()=>{ if(computeModeEl && computeModeEl.value==='sample') updateAll(); }); }
+  // initial visibility
+  updateComputeControlsVisibility();
+
+  // progress helper
+  function setProgress(percent, indeterminate = false){
+    if(!progressBar || !progressWrap) return;
+    if(percent === null){ progressWrap.style.display = 'none'; progressBar.classList.remove('indeterminate'); progressBar.style.width = '0%'; progressBar.setAttribute('aria-valuenow', '0'); return; }
+    progressWrap.style.display = 'block';
+    if(indeterminate){ progressBar.classList.add('indeterminate'); progressBar.style.width = '100%'; progressBar.setAttribute('aria-valuenow', '0'); }
+    else { progressBar.classList.remove('indeterminate'); const p = Math.max(0, Math.min(100, percent)); progressBar.style.width = p + '%'; progressBar.setAttribute('aria-valuenow', String(Math.round(p))); }
+  }
 
   function initHints(n){
     hints = [];
@@ -171,13 +200,21 @@
   // to estimate probabilities. The sampler runs in async chunks so the UI can update a status
   // element and remain responsive.
   function computeProbabilitiesAsync(){
+    const runId = ++currentRunId;
     const n = items.length;
     const indices = Array.from({length:n}, (_,i)=>i);
-    if(n <= 9){
-      // exact
+    const mode = computeModeEl ? computeModeEl.value : 'auto';
+
+    // helper to check for cancellation
+    const isCanceled = ()=> runId !== currentRunId;
+
+    // small n exact synchronous (fast)
+    if(mode !== 'sample' && n <= 9){
       const counts = Array.from({length:n}, ()=>Array(n).fill(0));
       let total = 0;
+      setProgress(0, false);
       for(const perm of permutations(indices)){
+        if(isCanceled()){ setProgress(null); return Promise.resolve({total:0, counts, approx:false}); }
         let ok = true;
         for(let b=0;b<n;b++){
           const p = perm[b];
@@ -187,25 +224,72 @@
         }
         if(ok){ total++; for(let b=0;b<n;b++){ counts[b][perm[b]]++; } }
       }
+      statusEl.textContent = `Computed exact over ${total} consistent permutations`;
+      setProgress(100, false);
       return Promise.resolve({total, counts, approx:false});
     }
 
-    // Monte Carlo sampling for larger n
-    const sampleSize = Math.max(20000, Math.min(100000, Math.floor(20000 * (11 / n))));
-    let done = 0;
-    let valid = 0;
-    const counts = Array.from({length:n}, ()=>Array(n).fill(0));
+    // If mode is 'sample' or (auto and n>9) -> sampling
+    if(mode === 'sample' || (mode === 'auto' && n > 9)){
+      const defaultSample = Math.max(20000, Math.min(100000, Math.floor(20000 * (11 / n))));
+      let sampleSize = defaultSample;
+      if(sampleSizeInput){ const v = Number(sampleSizeInput.value); if(!Number.isNaN(v) && v>0) sampleSize = Math.min(1000000, Math.max(100, Math.floor(v))); }
+      let done = 0;
+      let valid = 0;
+      const counts = Array.from({length:n}, ()=>Array(n).fill(0));
 
-    statusEl.textContent = `Sampling ${sampleSize} random permutations (approximate) ...`;
+      statusEl.textContent = `Sampling ${sampleSize} random permutations (approximate) ...`;
+      setProgress(0, false);
 
+      return new Promise((resolve)=>{
+        const chunk = 500;
+        function runChunk(){
+          if(isCanceled()){ statusEl.textContent = 'Sampling canceled'; return resolve({total:0, counts, approx:true}); }
+          const lim = Math.min(done + chunk, sampleSize);
+          for(; done < lim; done++){
+            const perm = indices.slice();
+            for(let i=n-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [perm[i],perm[j]]=[perm[j],perm[i]]; }
+            let ok = true;
+            for(let b=0;b<n;b++){
+              const p = perm[b];
+              const h = hints[b];
+              if(h.is !== null && p !== h.is){ ok=false; break; }
+              if(h.not.has(p)){ ok=false; break; }
+            }
+            if(ok){ valid++; for(let b=0;b<n;b++){ counts[b][perm[b]]++; } }
+          }
+          statusEl.textContent = `Sampling ${sampleSize} permutations — done ${done}/${sampleSize}, valid ${valid}`;
+          setProgress((done / sampleSize) * 100, false);
+          if(done < sampleSize) setTimeout(runChunk, 0);
+          else { statusEl.textContent = `Sampling complete — ${valid} valid permutations (approx).`; setProgress(100, false); resolve({total: valid, counts, approx:true}); }
+        }
+        setTimeout(runChunk, 0);
+      });
+    }
+
+    // Otherwise mode==='exact' and n may be large: run an exact enumeration asynchronously in chunks
+    // This will compute every permutation (may take a long time) but will update status. It can be canceled by starting another run.
     return new Promise((resolve)=>{
-      const chunk = 500; // iterations per event loop tick
+      const counts = Array.from({length:n}, ()=>Array(n).fill(0));
+      let valid = 0;
+      let processed = 0;
+      const gen = permutations(indices);
+      // compute total permutations for status using BigInt
+      function factorialBig(n){ let f = 1n; for(let i=2;i<=n;i++) f *= BigInt(i); return f; }
+      const totalPermsBig = factorialBig(n);
+      const totalPermsStr = totalPermsBig.toString();
+      const canDeterminate = totalPermsBig <= BigInt(Number.MAX_SAFE_INTEGER);
+      const totalPermsNum = canDeterminate ? Number(totalPermsBig) : null;
+      setProgress(0, !canDeterminate);
+      const chunk = 500;
       function runChunk(){
-        const lim = Math.min(done + chunk, sampleSize);
-        for(; done < lim; done++){
-          // generate random permutation by shuffling indices
-          const perm = indices.slice();
-          for(let i=n-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [perm[i],perm[j]]=[perm[j],perm[i]]; }
+  if(isCanceled()){ statusEl.textContent = 'Exact computation canceled'; setProgress(null); return resolve({total:valid, counts, approx:false}); }
+        let iter = 0;
+        while(iter < chunk){
+          const nxt = gen.next();
+          if(nxt.done){ statusEl.textContent = `Exact complete — ${valid} valid permutations`; setProgress(100, false); return resolve({total:valid, counts, approx:false}); }
+          processed++;
+          const perm = nxt.value;
           let ok = true;
           for(let b=0;b<n;b++){
             const p = perm[b];
@@ -214,13 +298,18 @@
             if(h.not.has(p)){ ok=false; break; }
           }
           if(ok){ valid++; for(let b=0;b<n;b++){ counts[b][perm[b]]++; } }
+          iter++;
         }
-        statusEl.textContent = `Sampling ${sampleSize} permutations — done ${done}/${sampleSize}, valid ${valid}`;
-        if(done < sampleSize) setTimeout(runChunk, 0);
-        else {
-          statusEl.textContent = `Sampling complete — ${valid} valid permutations (approx).`;
-          resolve({total: valid, counts, approx:true});
+        if(canDeterminate){
+          const pct = (processed / totalPermsNum) * 100;
+          setProgress(pct, false);
+          statusEl.textContent = `Exact enumeration — processed ${processed.toLocaleString()} of ${totalPermsStr} permutations — valid ${valid}`;
+        } else {
+          // indeterminate progress
+          setProgress(0, true);
+          statusEl.textContent = `Exact enumeration — processed ${processed.toLocaleString()} permutations (total ${totalPermsStr}) — valid ${valid}`;
         }
+        setTimeout(runChunk, 0);
       }
       setTimeout(runChunk, 0);
     });
@@ -256,35 +345,83 @@
         tr.appendChild(td1); tr.appendChild(td2);
         table.appendChild(tr);
       }
-      // also show total count
-      const footer = document.createElement('div'); footer.className='small'; footer.textContent = res.approx ? `Sampled valid permutations: ${total} (approx)` : `Consistent permutations: ${total}`;
+      // no per-box footer (we show computation status in the single global status area)
       if(table.nextSibling && table.nextSibling.className==='small') table.parentNode.removeChild(table.nextSibling);
-      table.parentNode.appendChild(footer);
     }
 
     // breakdown: best for each item
-    bestForItem.innerHTML = '<h4>Best boxes for each item</h4>';
-    avoidForItem.innerHTML = '<h4>Boxes to avoid for each item</h4>';
-    for(let i=0;i<n;i++){
-      // find box with max probability for item i
-      let bestP = -1, bestBoxes=[];
-      let worstP = 2, worstBoxes=[];
-      for(let b=0;b<n;b++){
-        const c = total? counts[b][i] : 0;
-        const p = total? c/total : 0;
-        if(p > bestP){ bestP = p; bestBoxes = [b]; }
-        else if(Math.abs(p-bestP) < 1e-12) bestBoxes.push(b);
-        if(p < worstP){ worstP = p; worstBoxes = [b]; }
-        else if(Math.abs(p-worstP) < 1e-12) worstBoxes.push(b);
+      bestForItem.innerHTML = '<h4>Probability breakdown — boxes are ordered most → least likely for each item</h4>' +
+        '<p class="small">Colors show relative likelihood across all items: greener = more likely (scaled against the overall min/max). Boxes with 0% are omitted.</p>';
+      // clear avoid section (we show full breakdown instead)
+      avoidForItem.innerHTML = '';
+      // If there are no valid permutations at all, show a short message
+      if(!total){
+        const note = document.createElement('div'); note.className = 'small'; note.textContent = 'No valid permutations (hints are contradictory or leave no possibilities).';
+        bestForItem.appendChild(note);
+        return;
       }
-      const bdiv = document.createElement('div'); bdiv.className='chip';
-      bdiv.textContent = `${items[i]} → best: ${bestBoxes.map(b=>'Box '+(b+1)).join(', ')} (${(bestP*100).toFixed(1)}%)`;
-      bestForItem.appendChild(bdiv);
 
-      const wdiv = document.createElement('div'); wdiv.className='chip';
-      wdiv.textContent = `${items[i]} → avoid: ${worstBoxes.map(b=>'Box '+(b+1)).join(', ')} (${(worstP*100).toFixed(1)}%)`;
-      avoidForItem.appendChild(wdiv);
-    }
+      // compute global min/max across all non-zero probabilities so colors are comparable between items
+      const allP = [];
+      for(let b=0;b<n;b++){ for(let i=0;i<n;i++){ const c = total? counts[b][i] : 0; const p = total? c/total : 0; if(p>0) allP.push(p); }}
+      const globalMin = allP.length ? Math.min(...allP) : 0;
+      const globalMax = allP.length ? Math.max(...allP) : 0;
+      const globalRange = globalMax - globalMin;
+
+      for(let i=0;i<n;i++){
+        const row = document.createElement('div'); row.className = 'breakdownItem';
+        const label = document.createElement('div'); label.className = 'breakdownItemLabel'; label.textContent = items[i];
+        row.appendChild(label);
+
+        // build array of boxes with probability (omit zeros)
+        const boxes = [];
+        for(let b=0;b<n;b++){ const c = total? counts[b][i] : 0; const p = total? c/total : 0; if(p>0) boxes.push({b,p}); }
+        if(boxes.length === 0){
+          const none = document.createElement('div'); none.className = 'small'; none.textContent = 'No possible boxes (0% for all)'; row.appendChild(none); bestForItem.appendChild(row); continue;
+        }
+
+        // sort descending (most likely left)
+        boxes.sort((a,bb)=> bb.p - a.p);
+
+    // we'll use globalRange/globalMin/globalMax to scale colors so items are comparable
+
+        const list = document.createElement('div'); list.className = 'breakdownList';
+        boxes.forEach((obj, idx)=>{
+          const b = obj.b; const p = obj.p;
+          const span = document.createElement('span'); span.className = 'boxProb';
+          if(idx===0) span.classList.add('best'); // best box highlight
+
+    // compute relative scale within [0,1] using global min/max; fallback to 1 when equal
+    let rel = (globalRange > 0) ? (p - globalMin) / globalRange : 1;
+    // slightly compress differences so nearby values remain visually similar (exponent <1)
+    rel = Math.pow(Math.max(0, rel), 0.9);
+
+    // special-case exact 100% to show vivid green
+    if(p === 1) rel = 1;
+
+    // map rel to hue 0 (red) -> 140 (green)
+    const hue = Math.round(rel * 140);
+    // map rel to lightness (higher rel -> darker)
+    const light = Math.round(92 - rel * 50);
+          const bg = `hsl(${hue} 75% ${light}%)`;
+          span.style.background = bg;
+          // text color for contrast
+          const textColor = rel > 0.55 ? '#fff' : '#111';
+          span.style.color = textColor;
+
+          const boxSpan = document.createElement('span'); boxSpan.className = 'boxLabel'; boxSpan.textContent = 'Box '+(b+1);
+          const pct = document.createElement('span'); pct.className = 'boxPct'; pct.textContent = total ? (' '+(p*100).toFixed(1)+'%') : ' —';
+          pct.style.color = textColor;
+
+          span.appendChild(boxSpan);
+          span.appendChild(pct);
+          span.title = `Box ${b+1}: ${(p*100).toFixed(2)}%`;
+          list.appendChild(span);
+        });
+
+        row.appendChild(list);
+        bestForItem.appendChild(row);
+      }
     // leave status as final message (already set by sampler), or clear for exact
     if(!res.approx) statusEl.textContent = `Computed exact over ${total} consistent permutations`;
   }
