@@ -32,7 +32,7 @@
       const input = document.createElement('input');
       input.type = 'text';
       input.value = name;
-      input.addEventListener('input', ()=>{ items[idx] = input.value; if(hints.length) updateAll(); });
+      input.addEventListener('input', ()=>{ items[idx] = input.value; if(hints.length) { refreshHintControls(); updateAll(); } });
       const remove = document.createElement('button');
       remove.textContent = '-';
       remove.className = 'remove';
@@ -41,6 +41,7 @@
         // keep internal item array consistent and re-render the list
         ensureItemCount(items.length);
         renderItemsList();
+        if(document.getElementById('box-0')) refreshHintControls();
       });
       li.appendChild(input);
       li.appendChild(remove);
@@ -48,7 +49,48 @@
     });
   }
 
-  addItemBtn.addEventListener('click', ()=>{ items.push('Item '+(items.length+1)); renderItemsList(); });
+  addItemBtn.addEventListener('click', ()=>{ items.push('Item '+(items.length+1)); renderItemsList(); if(document.getElementById('box-0')) refreshHintControls(); });
+
+  // Refresh hint controls (select options and not-check labels) to reflect current item names.
+  // Preserves hint state in `hints` and only updates the UI elements if boxes exist.
+  function refreshHintControls(){
+    if(!hints || hints.length === 0) return;
+    for(let b=0;b<hints.length;b++){
+      const boxEl = document.getElementById(`box-${b}`);
+      if(!boxEl) continue;
+      // update select options
+      const sel = boxEl.querySelector('select');
+      if(sel){
+        const curVal = sel.value;
+        sel.innerHTML = '';
+        const optNone = document.createElement('option'); optNone.value = ''; optNone.textContent = '(none)'; sel.appendChild(optNone);
+        items.forEach((it,idx)=>{ const o = document.createElement('option'); o.value = idx; o.textContent = it; sel.appendChild(o); });
+        // restore selected value from hints
+        sel.value = (hints[b].is === null) ? '' : String(hints[b].is);
+      }
+      // update not checkboxes
+      const notList = boxEl.querySelector('.notList');
+      if(notList){
+        notList.innerHTML = '';
+        items.forEach((it,idx)=>{
+          const cb = document.createElement('label'); cb.style.marginRight='8px';
+          const input = document.createElement('input'); input.type='checkbox'; input.className='notChk';
+          input.dataset.item = idx; input.dataset.box = b;
+          input.checked = hints[b].not.has(idx);
+          input.addEventListener('change', ()=>{
+            const box = Number(input.dataset.box);
+            const item = Number(input.dataset.item);
+            if(input.checked) hints[box].not.add(item); else hints[box].not.delete(item);
+            if(hints[box].is===item){ hints[box].is = null; const sel2 = document.querySelector(`#box-${box} select`); if(sel2) sel2.value = ''; }
+            updateAll();
+          });
+          cb.appendChild(input);
+          cb.appendChild(document.createTextNode(' '+it));
+          notList.appendChild(cb);
+        });
+      }
+    }
+  }
 
   // toggle sample size control visibility depending on compute mode
   function updateComputeControlsVisibility(){
@@ -125,7 +167,7 @@
       const hintsDiv = document.createElement('div'); hintsDiv.className='hints';
       // Is selector
       const isLabel = document.createElement('label'); isLabel.className='small';
-      isLabel.textContent = 'Is:';
+      isLabel.textContent = 'Is: ';
       const isSelect = document.createElement('select'); isSelect.dataset.box = b;
       const optNone = document.createElement('option'); optNone.value=''; optNone.textContent='(none)'; isSelect.appendChild(optNone);
       items.forEach((it,idx)=>{ const o=document.createElement('option'); o.value=idx; o.textContent=it; isSelect.appendChild(o); });
@@ -363,10 +405,23 @@
 
       // compute global min/max across all non-zero probabilities so colors are comparable between items
       const allP = [];
-      for(let b=0;b<n;b++){ for(let i=0;i<n;i++){ const c = total? counts[b][i] : 0; const p = total? c/total : 0; if(p>0) allP.push(p); }}
-      const globalMin = allP.length ? Math.min(...allP) : 0;
-      const globalMax = allP.length ? Math.max(...allP) : 0;
-      const globalRange = globalMax - globalMin;
+      const nonOneP = [];
+      for(let b=0;b<n;b++){
+        for(let i=0;i<n;i++){
+          const c = total? counts[b][i] : 0;
+          const p = total? c/total : 0;
+          if(p>0){ allP.push(p); if(p !== 1) nonOneP.push(p); }
+        }
+      }
+      let globalMin, globalMax, globalRange;
+      if(nonOneP.length > 0){
+        globalMin = Math.min(...nonOneP);
+        globalMax = Math.max(...nonOneP);
+        globalRange = globalMax - globalMin;
+      } else if(allP.length > 0){
+        // all non-zero probabilities are 1 — use 0..1 range so 1 can still be vivid but won't compress others
+        globalMin = 0; globalMax = 1; globalRange = 1;
+      } else { globalMin = 0; globalMax = 0; globalRange = 0; }
 
       for(let i=0;i<n;i++){
         const row = document.createElement('div'); row.className = 'breakdownItem';
